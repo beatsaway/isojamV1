@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Continuous Isometric Grid with BPM and TriCell</title>
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background-color: #f0f0f0;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            border: 1px solid black;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            display: flex;
+            gap: 1px;
+            font-size: 16pt;
+            align-items: center;
+            cursor: pointer;
+        }
+        #bpmSlider {
+            width: 720px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <input id="colorPicker" type="color" value="#ff0000">
+        
+        <span id="resetButton" title="Go to the very beginning">⏪</span>
+        <span id="leftButton">⬅️ </span>
+
+        <span id="rightButton">➡️</span><span id="playPauseButton" title="Play">▶️</span>
+        <input id="bpmSlider" type="range" min="60" max="480" value="120">
+        <span id="bpmValue">120 BPM</span>
+        <span id="saveButton" title="SaveProject">💾</span>
+        <span id="loadButton" title="LoadProject">📁</span>
+        <span id="takePhotoButton" title="TakePhoto">📷</span>
+        <span id="GridButton" title="On/off grid">𓈈</span>
+    </div>
+
+    <canvas id="triangleColumns"></canvas>
+
+    <script>
+        let gridVisible = true;
+
+        class TriCell {
+            constructor(column, row, size, isRightPointing) {
+                this.column = column;
+                this.row = row;
+                this.size = size;
+                this.isRightPointing = isRightPointing;
+                this.color = null; // Changed from 'white' to null
+                this.isActive = false;
+                this.midX = 0;
+                this.midY = 0;
+            }
+
+            draw(context, offsetX) {
+                const x = this.column * this.size + offsetX;
+                const y = this.row * this.size / 2 + (this.column % 2 === 0 ? this.size / 2 : 0);
+                
+                context.beginPath();
+                if (this.isRightPointing) {
+                    context.moveTo(x, y);
+                    context.lineTo(x + this.size, y + this.size / 2);
+                    context.lineTo(x, y + this.size);
+                    this.midX = (x + (x + this.size) + x) / 3;
+                    this.midY = (y + (y + this.size / 2) + (y + this.size)) / 3;
+                } else {
+                    context.moveTo(x, y + this.size / 2);
+                    context.lineTo(x + this.size, y);
+                    context.lineTo(x + this.size, y + this.size);
+                    this.midX = (x + (x + this.size) + (x + this.size)) / 3;
+                    this.midY = ((y + this.size / 2) + y + (y + this.size)) / 3;
+                }
+                context.closePath();
+                if (gridVisible) {
+                    context.strokeStyle = this.isActive ? '#888888' : '#CCCCCC';
+                    context.stroke();
+                }
+                if (this.color !== null) {
+                    context.fillStyle = this.color;
+                    context.fill();
+                }
+            }
+
+            setColor(color) {
+                this.color = color;
+            }
+
+            setActive(isActive) {
+                this.isActive = isActive;
+            }
+
+            getMidpoint() {
+                return { x: this.midX, y: this.midY };
+            }
+        }
+
+        function toggleGrid() {
+            gridVisible = !gridVisible;
+            drawInterlockingColumns(context, offsetX, zoom);
+        }
+
+        const canvas = document.getElementById('triangleColumns');
+        const context = canvas.getContext('2d');
+        const bpmSlider = document.getElementById('bpmSlider');
+        const bpmValue = document.getElementById('bpmValue');
+        const playPauseButton = document.getElementById('playPauseButton');
+        const colorPicker = document.getElementById('colorPicker');
+        const resetButton = document.getElementById('resetButton');
+        const leftButton = document.getElementById('leftButton');
+        const rightButton = document.getElementById('rightButton');
+        const saveButton = document.getElementById('saveButton');
+        const loadButton = document.getElementById('loadButton');
+        const gridButton = document.getElementById('GridButton');
+
+        let triangleSize = 36;
+        let repetitions = 1920;
+        let zoom = 1;
+        let offsetX = 0;
+        let bpm = 120;
+        let isPlaying = false;
+        let animationFrameId = null;
+        let activeColumn = 0;
+        let triCells = [];
+        let currentColor = colorPicker.value;
+        let isColoring = false;
+
+        function initTriCells() {
+            triCells = [];
+            for (let col = 0; col < repetitions; col++) {
+                let column = [];
+                for (let row = 0; row < 64; row++) {
+                    column.push(new TriCell(col, row, triangleSize, row % 2 === 0));
+                }
+                triCells.push(column);
+            }
+        }
+
+        function drawInterlockingColumns(context, offsetX, zoom) {
+            const currentColumn = Math.floor(-offsetX / triangleSize) % repetitions;
+            activeColumn = currentColumn;
+
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            context.save();
+            context.scale(zoom, zoom);
+            context.translate(offsetX, 0);
+
+            triCells.forEach((column, colIndex) => {
+                column.forEach(cell => {
+                    cell.setActive(colIndex === currentColumn);
+                    cell.draw(context, 0);
+                });
+            });
+
+            context.restore();
+        }
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            drawInterlockingColumns(context, offsetX, zoom);
+        }
+
+        function play() {
+            const beatInterval = 60 / bpm * 1000;
+            const distancePerBeat = triangleSize;
+            const distancePerFrame = distancePerBeat / (beatInterval / (1000 / 60));
+
+            let lastTimestamp = null;
+
+            function animate(timestamp) {
+                if (lastTimestamp === null) lastTimestamp = timestamp;
+                const deltaTime = timestamp - lastTimestamp;
+
+                const moveDistance = (distancePerFrame * deltaTime) / (1000 / 60);
+
+                offsetX -= moveDistance;
+                drawInterlockingColumns(context, offsetX, zoom);
+
+                lastTimestamp = timestamp;
+                animationFrameId = requestAnimationFrame(animate);
+            }
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        function pause() {
+            cancelAnimationFrame(animationFrameId);
+            animationFrameId = null;
+        }
+
+        function getClosestTriCell(clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (clientX - rect.left) / zoom - offsetX;
+            const y = (clientY - rect.top) / zoom;
+            
+            let closestCell = null;
+            let minDistance = Infinity;
+
+            for (let column of triCells) {
+                for (let cell of column) {
+                    const { x: midX, y: midY } = cell.getMidpoint();
+                    const distance = Math.sqrt((midX - x) ** 2 + (midY - y) ** 2);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestCell = cell;
+                    }
+                }
+            }
+            
+            return closestCell;
+        }
+
+        function colorTriCell(cell) {
+            if (cell) {
+                cell.setColor(currentColor);
+                drawInterlockingColumns(context, offsetX, zoom);
+            }
+        }
+
+        let moveInterval;
+        const moveSpeed = 2;
+
+        function startMoving(direction) {
+            if (moveInterval) clearInterval(moveInterval);
+            moveInterval = setInterval(() => {
+                offsetX += direction * moveSpeed;
+                drawInterlockingColumns(context, offsetX, zoom);
+            }, 16);
+        }
+
+        function stopMoving() {
+            clearInterval(moveInterval);
+        }
+
+        function updateNavigationButtonsVisibility() {
+            const leftButton = document.getElementById('leftButton');
+            const rightButton = document.getElementById('rightButton');
+            const resetButton = document.getElementById('resetButton');
+            
+            if (isPlaying) {
+                leftButton.classList.add('hidden');
+                rightButton.classList.add('hidden');
+                resetButton.classList.add('hidden');
+            } else {
+                leftButton.classList.remove('hidden');
+                rightButton.classList.remove('hidden');
+                resetButton.classList.remove('hidden');
+            }
+        }
+
+        function saveProject() {
+            const projectData = {
+                bpm: bpm,
+                cells: triCells.map(column => column.map(cell => ({
+                    color: cell.color,
+                    isActive: cell.isActive
+                })))
+            };
+
+            const blob = new Blob([JSON.stringify(projectData)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'triangle_grid_project.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function loadProject() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.onchange = function(event) {
+                const file = event.target.files[0];
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const projectData = JSON.parse(e.target.result);
+                    
+                    bpm = projectData.bpm;
+                    bpmSlider.value = bpm;
+                    bpmValue.textContent = `${bpm} BPM`;
+                    
+                    projectData.cells.forEach((column, colIndex) => {
+                        column.forEach((cellData, rowIndex) => {
+                            triCells[colIndex][rowIndex].color = cellData.color;
+                            triCells[colIndex][rowIndex].isActive = cellData.isActive;
+                        });
+                    });
+                    
+                    drawInterlockingColumns(context, offsetX, zoom);
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+
+        function takePhoto() {
+            let firstFilledColumn = Infinity;
+            let lastFilledColumn = -1;
+
+            // Find the range of filled columns
+            triCells.forEach((column, colIndex) => {
+                if (column.some(cell => cell.color !== null)) {
+                    firstFilledColumn = Math.min(firstFilledColumn, colIndex);
+                    lastFilledColumn = Math.max(lastFilledColumn, colIndex);
+                }
+            });
+
+            // If no filled columns found, capture the entire grid
+            if (lastFilledColumn === -1) {
+                firstFilledColumn = 0;
+                lastFilledColumn = triCells.length - 1;
+            }
+
+            const tempCanvas = document.createElement('canvas');
+            const tempContext = tempCanvas.getContext('2d');
+            
+            const columnsToCapture = lastFilledColumn - firstFilledColumn + 1;
+            tempCanvas.width = columnsToCapture * triangleSize;
+            tempCanvas.height = canvas.height;
+            
+            // Draw the content to the temporary canvas
+            tempContext.save();
+            tempContext.translate(-firstFilledColumn * triangleSize, 0);
+            triCells.forEach((column, colIndex) => {
+                if (colIndex >= firstFilledColumn && colIndex <= lastFilledColumn) {
+                    column.forEach(cell => cell.draw(tempContext, 0));
+                }
+            });
+            tempContext.restore();
+            
+            // Convert the canvas to a data URL in PNG format (JPEG doesn't support transparency)
+            const dataURL = tempCanvas.toDataURL('image/png');
+            
+            // Create a link element to trigger the download
+            const link = document.createElement('a');
+            link.href = dataURL;
+            link.download = 'triangle_grid.png';
+            
+            // Trigger the download
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        bpmSlider.addEventListener('input', function() {
+            bpm = parseInt(this.value);
+            bpmValue.textContent = `${bpm} BPM`;
+            if (isPlaying) {
+                pause();
+                play();
+            }
+        });
+
+        playPauseButton.addEventListener('click', function() {
+            if (isPlaying) {
+                pause();
+                this.textContent = '▶️';
+            } else {
+                play();
+                this.textContent = '⏸️';
+            }
+            isPlaying = !isPlaying;
+            updateNavigationButtonsVisibility();
+        });
+
+        canvas.addEventListener('mousedown', function(e) {
+            const cell = getClosestTriCell(e.clientX, e.clientY);
+            colorTriCell(cell);
+            isColoring = true;
+        });
+
+        canvas.addEventListener('mousemove', function(e) {
+            if (isColoring) {
+                const cell = getClosestTriCell(e.clientX, e.clientY);
+                colorTriCell(cell);
+            }
+        });
+
+        canvas.addEventListener('mouseup', function() {
+            isColoring = false;
+        });
+
+        canvas.addEventListener('mouseleave', function() {
+            isColoring = false;
+        });
+
+        canvas.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            zoom += e.deltaY * -0.001;
+            zoom = Math.min(Math.max(zoom, 0.5), 3);
+            drawInterlockingColumns(context, offsetX, zoom);
+        });
+
+        colorPicker.addEventListener('input', function() {
+            currentColor = this.value;
+        });
+
+        resetButton.addEventListener('click', function() {
+            offsetX = 0;
+            drawInterlockingColumns(context, 0, zoom);
+        });
+
+        leftButton.addEventListener('mousedown', () => startMoving(72));
+    leftButton.addEventListener('mouseup', stopMoving);
+    leftButton.addEventListener('mouseleave', stopMoving);
+
+    rightButton.addEventListener('mousedown', () => startMoving(-72));
+    rightButton.addEventListener('mouseup', stopMoving);
+    rightButton.addEventListener('mouseleave', stopMoving);
+
+    saveButton.addEventListener('click', saveProject);
+    loadButton.addEventListener('click', loadProject);
+
+    const takePhotoButton = document.getElementById('takePhotoButton');
+    takePhotoButton.addEventListener('click', takePhoto);
+
+    gridButton.addEventListener('click', toggleGrid);
+
+    window.addEventListener('resize', resizeCanvas);
+
+    initTriCells();
+    resizeCanvas();
+    updateNavigationButtonsVisibility();
+</script>
+</body>
+</html>
